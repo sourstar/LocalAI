@@ -14184,6 +14184,20 @@ definitions:
         type: string
       id:
         type: string
+      load_options:
+        description: |-
+          LoadOptions are the options the backend's LoadModel call received, as
+          LocalAI sent them: the model's config completed with LocalAI's
+          defaults (the GGUF guess, the hardware auto-tuning, the application's
+          settings). protojson with proto field names; unset fields omitted.
+          Absent when this host did not issue the load.
+        type: object
+      load_options_hash:
+        description: |-
+          LoadOptionsHash is config.EffectiveModelOptionsHash of the same
+          options, the hash the distributed registry records per replica: it
+          changes exactly when a reload gave the backend different options.
+        type: string
       process:
         allOf:
         - $ref: '#/definitions/schema.SysInfoProcess'

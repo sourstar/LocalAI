@@ -11,6 +11,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/mudler/LocalAI/core/config"
 	"github.com/mudler/LocalAI/core/http/endpoints/localai"
+	pb "github.com/mudler/LocalAI/pkg/grpc/proto"
 	"github.com/mudler/LocalAI/pkg/model"
 	"github.com/mudler/LocalAI/pkg/system"
 	process "github.com/mudler/go-processmanager"
@@ -45,5 +46,34 @@ var _ = Describe("SystemInformations memory", func() {
 			map[string]any{"id": "remote", "backend": "llama-cpp"},
 			map[string]any{"id": "stopped"},
 		))
+	})
+
+	It("lists the options each model was loaded with, and their hash", func() {
+		sent := &pb.ModelOptions{Model: "encoder.gguf", ContextSize: 8192, Embeddings: true, RopeFreqBase: 10000.5}
+		loaded := model.NewModel("encoder", "worker:50051", nil)
+		loaded.SetLoadOptions(sent)
+		ml := model.NewModelLoader(&system.SystemState{})
+		store := model.NewInMemoryModelStore()
+		store.Set("encoder", loaded)
+		ml.SetModelStore(store)
+		app := echo.New()
+		path, err := os.MkdirTemp("", "system-info-")
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(os.RemoveAll, path)
+		app.GET("/system", localai.SystemInformations(config.NewModelConfigLoader(path), ml, &config.ApplicationConfig{}, nil))
+		rec := httptest.NewRecorder()
+		app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/system", nil))
+		Expect(rec.Code).To(Equal(http.StatusOK))
+		var response struct {
+			Models []map[string]any `json:"loaded_models"`
+		}
+		Expect(json.Unmarshal(rec.Body.Bytes(), &response)).To(Succeed())
+		Expect(response.Models).To(HaveLen(1))
+		Expect(response.Models[0]["load_options"]).To(Equal(map[string]any{
+			"Model": "encoder.gguf", "ContextSize": float64(8192), "Embeddings": true, "RopeFreqBase": 10000.5,
+		}), "proto field names, unset fields omitted")
+		hash, err := config.EffectiveModelOptionsHash(sent)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.Models[0]["load_options_hash"]).To(Equal(hash))
 	})
 })

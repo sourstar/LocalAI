@@ -222,6 +222,16 @@ type SysInfoModel struct {
 	// SizeVRAM is DRM-accounted resident device memory in bytes. Nil means
 	// the backend process tree has no complete supported reading.
 	SizeVRAM *uint64 `json:"size_vram,omitempty"`
+	// LoadOptions are the options the backend's LoadModel call received, as
+	// LocalAI sent them: the model's config completed with LocalAI's
+	// defaults (the GGUF guess, the hardware auto-tuning, the application's
+	// settings). protojson with proto field names; unset fields omitted.
+	// Absent when this host did not issue the load.
+	LoadOptions json.RawMessage `json:"load_options,omitempty" swaggertype:"object"`
+	// LoadOptionsHash is config.EffectiveModelOptionsHash of the same
+	// options, the hash the distributed registry records per replica: it
+	// changes exactly when a reload gave the backend different options.
+	LoadOptionsHash string `json:"load_options_hash,omitempty"`
 }
 
 // SysInfoProcess is a point-in-time reading of one backend process.
