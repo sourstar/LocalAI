@@ -228,6 +228,7 @@ func (ml *ModelLoader) spawnGRPCModel(backend, uri string, o *Options, modelID, 
 		ml.stopLoadProcess(client, modelID)
 		return nil, fmt.Errorf("could not load model (no success): %s", res.Message)
 	}
+	client.SetLoadOptions(options)
 
 	// Register size for size-aware eviction using the caller-supplied estimate
 	// (computed via pkg/vram, which handles multi-file and non-GGUF models).

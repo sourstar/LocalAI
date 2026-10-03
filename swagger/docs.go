@@ -37548,6 +37548,14 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "load_options": {
+                    "description": "LoadOptions are the options the backend's LoadModel call received, as\nLocalAI sent them: the model's config completed with LocalAI's\ndefaults (the GGUF guess, the hardware auto-tuning, the application's\nsettings). protojson with proto field names; unset fields omitted.\nAbsent when this host did not issue the load.",
+                    "type": "object"
+                },
+                "load_options_hash": {
+                    "description": "LoadOptionsHash is config.EffectiveModelOptionsHash of the same\noptions, the hash the distributed registry records per replica: it\nchanges exactly when a reload gave the backend different options.",
+                    "type": "string"
+                },
                 "process": {
                     "description": "Process is the backend process serving the model on this host. Absent\nwhen the model has no local process (a distributed worker holds it) or\nthe process could not be read.",
                     "allOf": [
