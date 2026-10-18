@@ -185,4 +185,10 @@ if(LLAMA_GRPC_BUILD_TESTS)
         target_compile_features(realtime_chat_check PRIVATE cxx_std_17)
         add_test(NAME realtime_chat_check COMMAND realtime_chat_check "${CMAKE_SOURCE_DIR}/models/templates/LFM3.jinja")
     endif()
+
+    # Special tokens around Embedding's token ids (standard library only).
+    add_executable(embedding_tokens_test embedding_tokens_test.cpp embedding_tokens.h)
+    target_include_directories(embedding_tokens_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_features(embedding_tokens_test PRIVATE cxx_std_17)
+    add_test(NAME embedding_tokens_test COMMAND embedding_tokens_test)
 endif()

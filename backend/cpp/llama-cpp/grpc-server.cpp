@@ -87,6 +87,7 @@
 #include "stream_peer.h"
 #include "realtime_session.h"
 #include "tts_request_options.h"
+#include "embedding_tokens.h"
 #include "transcription_prompt.h"
 #include <getopt.h>
 #include <grpcpp/ext/proto_server_reflection_plugin.h>
@@ -3982,6 +3983,21 @@ public:
         // for the shape of input/content, see tokenize_input_prompts()
         json prompt = body.at("embeddings");
 
+        // Token ids are embedded, with the special tokens a text gets
+        // (embedding_tokens.h). An array of numbers is taken by
+        // tokenize_input_prompts() as the tokens themselves.
+        if (request->embeddingtokens_size() > 0) {
+            const std::string probe = "a";
+            const auto ids = llama_grpc::with_special_tokens(
+                common_tokenize(ctx_server.impl->vocab, probe, /*add_special=*/false, /*parse_special=*/true),
+                common_tokenize(ctx_server.impl->vocab, probe, /*add_special=*/true, /*parse_special=*/true),
+                std::vector<int32_t>(request->embeddingtokens().begin(), request->embeddingtokens().end()));
+            if (!ids) {
+                return grpc::Status(grpc::StatusCode::INTERNAL,
+                                    "cannot tell where this model's special tokens go around token ids");
+            }
+            prompt = *ids;
+        }
 
         auto tokenized_prompts = tokenize_input_prompts(ctx_server.impl->vocab, ctx_server.impl->mctx, prompt, true, true LOCALAI_MTMD_INIT_OPT_ARG(ctx_server.impl->init_opt));
         for (const auto & tokens : tokenized_prompts) {
