@@ -97,6 +97,10 @@ cp -r realtime_chat_check.cpp llama.cpp/tools/grpc-server/
 # unit test (compiled only when -DLLAMA_GRPC_BUILD_TESTS=ON).
 cp -r slot_cache.h llama.cpp/tools/grpc-server/
 cp -r slot_cache_test.cpp llama.cpp/tools/grpc-server/
+# Special tokens around Embedding's token ids (included by grpc-server.cpp)
+# and its standalone unit test.
+cp -r embedding_tokens.h llama.cpp/tools/grpc-server/
+cp -r embedding_tokens_test.cpp llama.cpp/tools/grpc-server/
 cp -rfv llama.cpp/vendor/nlohmann/json.hpp llama.cpp/tools/grpc-server/
 cp -rfv llama.cpp/vendor/cpp-httplib/httplib.h llama.cpp/tools/grpc-server/
 
