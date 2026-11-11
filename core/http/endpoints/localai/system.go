@@ -9,6 +9,7 @@ import (
 	"github.com/mudler/LocalAI/core/services/monitoring"
 	"github.com/mudler/LocalAI/pkg/model"
 	"github.com/mudler/LocalAI/pkg/xsysinfo"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // SystemInformations returns the system informations
@@ -46,6 +47,16 @@ func SystemInformations(cl *config.ModelConfigLoader, ml *model.ModelLoader, app
 			if pid, ok := localPID(m); ok {
 				if used, ok := xsysinfo.ProcessVRAM(int(pid)); ok {
 					entry.SizeVRAM = &used
+				}
+			}
+			// What the backend was actually given, not what the YAML says:
+			// LocalAI completes the config before the load, so the two differ.
+			if opts := m.LoadOptions(); opts != nil {
+				raw, rawErr := protojson.MarshalOptions{UseProtoNames: true}.Marshal(opts)
+				hash, hashErr := config.EffectiveModelOptionsHash(opts)
+				if rawErr == nil && hashErr == nil {
+					entry.LoadOptions = raw
+					entry.LoadOptionsHash = hash
 				}
 			}
 			sysmodels = append(sysmodels, entry)

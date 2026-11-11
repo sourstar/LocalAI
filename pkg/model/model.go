@@ -5,7 +5,9 @@ import (
 	"time"
 
 	grpc "github.com/mudler/LocalAI/pkg/grpc"
+	pb "github.com/mudler/LocalAI/pkg/grpc/proto"
 	process "github.com/mudler/go-processmanager"
+	"google.golang.org/protobuf/proto"
 )
 
 // healthCheckTTL is the duration for which a successful health check is cached.
@@ -20,6 +22,7 @@ type Model struct {
 	process         *process.Process
 	lastHealthCheck time.Time
 	healthMu        sync.Mutex
+	loadOptions     *pb.ModelOptions
 	sync.Mutex
 }
 
@@ -43,6 +46,33 @@ func NewModelWithClient(ID, address string, client grpc.Backend) *Model {
 
 func (m *Model) Process() *process.Process {
 	return m.process
+}
+
+// SetLoadOptions records the options the backend's LoadModel call received,
+// as sent. They are what the model actually runs with: its config completed
+// with LocalAI's defaults (the GGUF guess, the hardware auto-tuning, the
+// application's settings), which neither the model's YAML nor any endpoint
+// shows otherwise. A copy is kept, so the caller may go on using opts.
+func (m *Model) SetLoadOptions(opts *pb.ModelOptions) {
+	m.Lock()
+	defer m.Unlock()
+	if opts == nil {
+		m.loadOptions = nil
+		return
+	}
+	m.loadOptions = proto.Clone(opts).(*pb.ModelOptions)
+}
+
+// LoadOptions returns a copy of what SetLoadOptions recorded, or nil when
+// this host did not issue the load (a model a remote worker holds, or one
+// registered without a load).
+func (m *Model) LoadOptions() *pb.ModelOptions {
+	m.Lock()
+	defer m.Unlock()
+	if m.loadOptions == nil {
+		return nil
+	}
+	return proto.Clone(m.loadOptions).(*pb.ModelOptions)
 }
 
 // IsRecentlyHealthy returns true if the model passed a health check within the TTL.
