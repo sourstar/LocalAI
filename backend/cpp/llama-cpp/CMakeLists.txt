@@ -148,6 +148,11 @@ if(LLAMA_GRPC_BUILD_TESTS)
     target_compile_features(option_parse_test PRIVATE cxx_std_17)
     add_test(NAME option_parse_test COMMAND option_parse_test)
 
+    add_executable(context_on_demand_test context_on_demand_test.cpp context_on_demand.h)
+    target_include_directories(context_on_demand_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_features(context_on_demand_test PRIVATE cxx_std_17)
+    add_test(NAME context_on_demand_test COMMAND context_on_demand_test)
+
     add_executable(parallel_params_test parallel_params_test.cpp parallel_params.h)
     target_include_directories(parallel_params_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_features(parallel_params_test PRIVATE cxx_std_17)

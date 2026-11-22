@@ -79,6 +79,10 @@ cp -r moe_cache_option.h llama.cpp/tools/grpc-server/
 cp -r option_parse.h llama.cpp/tools/grpc-server/
 cp -r option_parse_test.cpp llama.cpp/tools/grpc-server/
 cp -r moe_cache_option_test.cpp llama.cpp/tools/grpc-server/
+# Context on demand: the request's keep and the model options (included by
+# grpc-server.cpp) and their standalone regression test.
+cp -r context_on_demand.h llama.cpp/tools/grpc-server/
+cp -r context_on_demand_test.cpp llama.cpp/tools/grpc-server/
 # Parent-death watcher (included by grpc-server.cpp) and its standalone unit
 # test (run via backend/cpp/run-unit-tests.sh; also buildable under ctest).
 cp -r parent_watch.h llama.cpp/tools/grpc-server/

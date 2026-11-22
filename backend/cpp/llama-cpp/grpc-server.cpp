@@ -84,6 +84,7 @@
 #include "moe_cache_option.h"
 #include "option_parse.h"
 #include "passthrough_options.h"
+#include "context_on_demand.h"
 #include "stream_peer.h"
 #include "realtime_session.h"
 #include "tts_request_options.h"
@@ -229,7 +230,7 @@ static inline void signal_handler(int signal) {
 
 // Forward declarations
 static void start_llama_server(server_context& ctx_server);
-static json parse_options(bool streaming, const backend::PredictOptions* predict, const common_params& params_base, llama_context* ctx);
+static json parse_options(bool streaming, const backend::PredictOptions* predict, const common_params& params_base, const llama_vocab* vocab);
 static ggml_type kv_cache_type_from_str(const std::string & s);
 static std::string get_all_kv_cache_types();
 static void add_rpc_devices(std::string servers);
@@ -279,7 +280,7 @@ static void start_llama_server(server_context& ctx_server) {
     ctx_server.start_loop();
 }
 
-json parse_options(bool streaming, const backend::PredictOptions* predict, const common_params& params_base, llama_context* ctx)
+json parse_options(bool streaming, const backend::PredictOptions* predict, const common_params& params_base, const llama_vocab* vocab)
 {
 
     // Create now a json data from the prediction options instead
@@ -479,7 +480,7 @@ json parse_options(bool streaming, const backend::PredictOptions* predict, const
     if (!params_base.sampling.preserved_tokens.empty()) {
         json preserved_tokens = json::array();
         for (const auto& token : params_base.sampling.preserved_tokens) {
-            preserved_tokens.push_back(common_token_to_piece(ctx, token));
+            preserved_tokens.push_back(common_token_to_piece(vocab, token));
         }
         data["preserved_tokens"] = preserved_tokens;
     }
@@ -755,6 +756,32 @@ static void params_parse(server_context& /*ctx_server*/, const backend::ModelOpt
         } else if (!strcmp(optname, "grpc_servers") || !strcmp(optname, "rpc_servers")) {
             if (optval != NULL) {
                 grpc_servers_option = optval_str;
+            }
+        } else if (!strcmp(optname, "context_on_demand")) {
+            // llama.cpp's --context-on-demand: a request that carries keep_context_ms
+            // in its metadata has the context freed that long after its answer, and
+            // the next request creates it again; the weights stay loaded. A request
+            // that carries none leaves the context loaded, as ever
+            const bool on = !(optval_str == "false" || optval_str == "0" || optval_str == "no" || optval_str == "off" || optval_str == "disabled");
+            if (!llama_grpc::set_context_on_demand(params, on)) {
+                fprintf(stderr, "[llama-cpp] context_on_demand: not supported by this llama.cpp, ignored\n");
+            }
+        } else if (!strcmp(optname, "context_canary")) {
+            // with context_on_demand: each context created is held to the output of
+            // the load's for a fixed input (llama.cpp's default). `context_canary:false`
+            // switches the check off
+            const bool on = !(optval_str == "false" || optval_str == "0" || optval_str == "no" || optval_str == "off" || optval_str == "disabled");
+            if (!llama_grpc::set_context_canary(params, on)) {
+                fprintf(stderr, "[llama-cpp] context_canary: not supported by this llama.cpp, ignored\n");
+            }
+        } else if (!strcmp(optname, "keep_context_ms")) {
+            // gives a keep to the requests that carry none in their metadata
+            // (without it such a request leaves the context loaded)
+            const int32_t ms = llama_grpc::parse_keep_context_ms(optval_str);
+            if (ms < 0) {
+                fprintf(stderr, "[llama-cpp] keep_context_ms: '%s' is not a number of milliseconds, ignored\n", optval_str.c_str());
+            } else if (!llama_grpc::set_keep_context_ms(params, ms)) {
+                fprintf(stderr, "[llama-cpp] keep_context_ms: not supported by this llama.cpp, ignored\n");
             }
         } else if (!strcmp(optname, "fit_params") || !strcmp(optname, "fit")) {
             if (optval_str == "true" || optval_str == "1" || optval_str == "yes" || optval_str == "on" || optval_str == "enabled") {
@@ -2523,6 +2550,10 @@ private:
     // distributed route is rejected instead of answered from the wrong model
     // (#10952). Written under LoadModel, read by the inference RPCs.
     std::string loaded_model_identity;
+    // The pooling type of the loaded model's context, read once at the load:
+    // it does not change, and the context it was read from may be gone
+    // between two requests (context_on_demand). Written under LoadModel.
+    enum llama_pooling_type loaded_pooling_type = LLAMA_POOLING_TYPE_UNSPECIFIED;
     // Serializes LoadModel. ctx_server.load_model() ends with init(), which
     // must run once per server_context: a second call rebuilds the slots and
     // the queue callbacks while the main loop uses them, and replaces the
@@ -2727,6 +2758,7 @@ public:
         result->set_success(true);
         loaded_model = true;
         loaded_model_identity = request->model();
+        loaded_pooling_type = ctx_server.get_meta().pooling_type;
         // Store copy of params_base for use in parse_options and other methods
         params_base = params;
 
@@ -2813,7 +2845,7 @@ public:
         if (params_base.model.path.empty()) {
             return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
         }
-        json data = parse_options(true, request, params_base, ctx_server.get_llama_context());
+        json data = parse_options(true, request, params_base, ctx_server.impl->vocab);
 
 
         //Raise error if embeddings is set to true
@@ -3218,6 +3250,8 @@ public:
                 task.apply_chat_session(chat_session);
 #endif
                 task.id_slot = json_value(data, "id_slot", -1);
+                // context on demand: the request's keep, -1 when it carries none
+                llama_grpc::set_keep_context_ms(task.params, llama_grpc::keep_context_ms_from(request->metadata()));
 
                 // OAI-compat: enable autoparser (PEG-based chat parsing) so that
                 // reasoning, tool calls, and content are classified into ChatDeltas.
@@ -3416,7 +3450,7 @@ public:
          if (params_base.model.path.empty()) {
              return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
          }
-         json data = parse_options(true, request, params_base, ctx_server.get_llama_context());
+         json data = parse_options(true, request, params_base, ctx_server.impl->vocab);
 
         data["stream"] = false;
         //Raise error if embeddings is set to true
@@ -3823,6 +3857,8 @@ public:
                 task.apply_chat_session(chat_session);
 #endif
                 task.id_slot = json_value(data, "id_slot", -1);
+                // context on demand: the request's keep, -1 when it carries none
+                llama_grpc::set_keep_context_ms(task.params, llama_grpc::keep_context_ms_from(request->metadata()));
 
                 // OAI-compat: enable autoparser (PEG-based chat parsing) so that
                 // reasoning, tool calls, and content are classified into ChatDeltas.
@@ -3970,7 +4006,7 @@ public:
         if (params_base.model.path.empty()) {
             return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
         }
-        json body = parse_options(false, request, params_base, ctx_server.get_llama_context());
+        json body = parse_options(false, request, params_base, ctx_server.impl->vocab);
 
         body["stream"] = false;
 
@@ -4023,6 +4059,8 @@ public:
 
                 task.params.res_type = TASK_RESPONSE_TYPE_NONE;
                 task.params.embd_normalize = embd_normalize;
+                // context on demand: the request's keep, -1 when it carries none
+                llama_grpc::set_keep_context_ms(task.params, llama_grpc::keep_context_ms_from(request->metadata()));
                 tasks.push_back(std::move(task));
             }
 
@@ -4035,7 +4073,13 @@ public:
         if (all_results.is_terminated) {
             return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
         } else if (all_results.error) {
-            return grpc::Status(grpc::StatusCode::INTERNAL, all_results.error->to_json().value("message", "Error in receiving results"));
+            const std::string message = all_results.error->to_json().value("message", "Error in receiving results");
+            // context on demand: a context that did not reproduce the canary was
+            // discarded; said beside the error (context_on_demand.h)
+            if (llama_grpc::is_context_canary_failure(message)) {
+                context->AddTrailingMetadata(llama_grpc::CONTEXT_CANARY_TRAILER, "failed");
+            }
+            return grpc::Status(grpc::StatusCode::INTERNAL, message);
         }
 
         // Extract the embeddings typed, straight from the task results (no
@@ -4067,9 +4111,16 @@ public:
         embeddingResult->set_dim(dim);
         embeddingResult->set_prompt_tokens(prompt_tokens);
         embeddingResult->set_layout(
-            llama_pooling_type(ctx_server.get_llama_context()) == LLAMA_POOLING_TYPE_NONE
+            loaded_pooling_type == LLAMA_POOLING_TYPE_NONE
                 ? backend::EMBEDDING_LAYOUT_PER_TOKEN
                 : backend::EMBEDDING_LAYOUT_FINAL);
+
+        // context on demand: the answer says whether the context was created
+        // for this call (context_on_demand.h, CONTEXT_CREATED_TRAILER)
+        if (llama_grpc::context_on_demand_of(params_base)) {
+            context->AddTrailingMetadata(llama_grpc::CONTEXT_CREATED_TRAILER,
+                                         std::to_string(llama_grpc::context_created_us(all_results.results)));
+        }
 
         std::cout << "[DEBUG] Embedding vectors: " << n_vectors << " x " << dim << std::endl;
 
@@ -4805,7 +4856,7 @@ public:
         if (params_base.model.path.empty()) {
             return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "Model not loaded");
         }
-        json body = parse_options(false, request, params_base, ctx_server.get_llama_context());
+        json body = parse_options(false, request, params_base, ctx_server.impl->vocab);
         body["stream"] = false;
 
         json tokens_response = json::array();
@@ -4816,7 +4867,7 @@ public:
 
 
             for (const auto& token : tokens) {
-                std::string piece = common_token_to_piece(ctx_server.get_llama_context(), token);
+                std::string piece = common_token_to_piece(ctx_server.impl->vocab, token);
                 response->add_tokens(token);
             }
         }
@@ -4984,7 +5035,7 @@ public:
 
         std::string content;
         for (const auto token : request->tokens()) {
-            content.append(common_token_to_piece(ctx_server.get_llama_context(), token));
+            content.append(common_token_to_piece(ctx_server.impl->vocab, token));
         }
         response->set_content(content);
         return grpc::Status::OK;
