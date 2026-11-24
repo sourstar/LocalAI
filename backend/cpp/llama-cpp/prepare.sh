@@ -62,6 +62,10 @@ cp -r passthrough_options_test.cpp llama.cpp/tools/grpc-server/
 # regression test.
 cp -r tts_request_options.h llama.cpp/tools/grpc-server/
 cp -r tts_request_options_test.cpp llama.cpp/tools/grpc-server/
+# Where a voice profile's encoded clip is kept (included by grpc-server.cpp)
+# and its standalone unit test.
+cp -r tts_voice_cache.h llama.cpp/tools/grpc-server/
+cp -r tts_voice_cache_test.cpp llama.cpp/tools/grpc-server/
 # Transcription prompt construction (included by grpc-server.cpp) and its
 # standalone regression test.
 cp -r transcription_prompt.h llama.cpp/tools/grpc-server/
@@ -198,6 +202,13 @@ if grep -q "set_voice" llama.cpp/tools/mtmd/mtmd-helper.h; then
 else
     HAS_TTS_VOICE=0
 fi
+# The "tts" chat template (common_chat_get_tts_prompt): the prompt of a text to
+# speak, with a named or described voice. It came before per-session voices.
+if grep -q "common_chat_get_tts_prompt" llama.cpp/common/chat.h; then
+    HAS_TTS_TEMPLATE=1
+else
+    HAS_TTS_TEMPLATE=0
+fi
 # Per-task ASR preset (common_chat_get_asr_prompt takes the requested language,
 # ggml-org/llama.cpp#31257). Older pins have the one-argument form, or none.
 if grep -qF "common_chat_get_asr_prompt(const common_chat_templates * chat_templates, const std::string & language" llama.cpp/common/chat.h; then
@@ -237,6 +248,7 @@ cat > llama.cpp/tools/grpc-server/llama_compat.h <<EOF
 #define LOCALAI_HAS_RERANK_FILES ${HAS_RERANK_FILES}
 #define LOCALAI_HAS_REALTIME ${HAS_REALTIME}
 #define LOCALAI_HAS_TTS_VOICE ${HAS_TTS_VOICE}
+#define LOCALAI_HAS_TTS_TEMPLATE ${HAS_TTS_TEMPLATE}
 #define LOCALAI_HAS_ASR_PRESET ${HAS_ASR_PRESET}
 EOF
 

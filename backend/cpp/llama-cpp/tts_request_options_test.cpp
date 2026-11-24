@@ -75,6 +75,58 @@ static void test_accepts_empty_voice_without_reference() {
     check(opts.voice_path.empty(), "empty voice without reference has no path");
 }
 
+static void test_a_model_that_clones_and_describes_takes_either_or_neither() {
+    using mode = llama_grpc::tts_voice_mode;
+    const std::map<std::string, std::string> params{{"ref_text", "Good morning."}};
+
+    // A voice profile: the HTTP layer resolved it to a file and its transcript.
+    const auto cloned = llama_grpc::parse_tts_request_options(
+        "Hello world", "/voices/ref.wav", "en", "", params, mode::reference_or_name, true);
+    check(cloned.ok, "a file is accepted as a reference");
+    check(cloned.voice_path == "/voices/ref.wav", "the file is the reference");
+    check(cloned.ref_text == "Good morning.", "the reference's transcript passes through");
+    check(cloned.voice.empty(), "a reference leaves the described voice empty");
+
+    // Not a file: a description for the "tts" template.
+    const auto described = llama_grpc::parse_tts_request_options(
+        "Hello world", "female, young adult", "en", "", params, mode::reference_or_name, false);
+    check(described.ok, "a description is accepted");
+    check(described.voice == "female, young adult", "the description is the template's voice");
+    check(described.voice_path.empty(), "a description is not a file");
+    check(described.ref_text.empty(), "a transcript without a reference is dropped");
+
+    // Neither: the model's own voice (a warm-up call, a client that names none).
+    const auto none = llama_grpc::parse_tts_request_options(
+        "Hello world", "", "", "", {}, mode::reference_or_name, false);
+    check(none.ok, "no voice is accepted when the reference is optional");
+    check(none.voice.empty() && none.voice_path.empty(), "no voice stays none");
+
+    // OpenAI's `instructions` describes the voice when the request names none,
+    // beside a reference too.
+    const auto instructed = llama_grpc::parse_tts_request_options(
+        "Hello world", "", "en", "male, elderly", {}, mode::reference_or_name, false);
+    check(instructed.voice == "male, elderly", "instructions describe the voice");
+    const auto both = llama_grpc::parse_tts_request_options(
+        "Hello world", "/voices/ref.wav", "en", "whisper", params, mode::reference_or_name, true);
+    check(both.voice_path == "/voices/ref.wav" && both.voice == "whisper", "a reference and instructions go together");
+    const auto named = llama_grpc::parse_tts_request_options(
+        "Hello world", "male", "en", "whisper", {}, mode::name, false);
+    check(named.voice == "male", "a named voice wins over instructions");
+}
+
+static void test_a_required_reference_keeps_its_rules_and_gains_the_transcript() {
+    using mode = llama_grpc::tts_voice_mode;
+    const auto opts = llama_grpc::parse_tts_request_options(
+        "Hello world", "/voices/ref.wav", "en", "ignored here", {{"ref_text", "Hi."}}, mode::reference, false);
+    check(opts.ok && opts.voice_path == "/voices/ref.wav", "a required reference is taken as a path, checked when it is read");
+    check(opts.ref_text == "Hi.", "a required reference carries its transcript");
+    check(opts.voice.empty(), "instructions are not a voice for a model that only clones");
+
+    const auto missing = llama_grpc::parse_tts_request_options(
+        "Hello world", "", "en", "male", {}, mode::reference, false);
+    check(!missing.ok, "a required reference is still required");
+}
+
 static void test_parses_sampling_params() {
     const std::map<std::string, std::string> params{
         {"top_k", "40"},
@@ -199,6 +251,41 @@ static void test_parses_max_frames() {
     check(zero.max_frames == 0, "max_frames of 0 means unset");
 }
 
+static void test_parses_the_decoding_s_seed_steps_and_guidance() {
+    using mode = llama_grpc::tts_voice_mode;
+    const auto unset = llama_grpc::parse_tts_request_options(
+        "Hello world", "", "it", "", {}, mode::reference_or_name, false);
+    check(unset.ok && unset.seed == -1 && unset.flow_steps == 0 && unset.cfg_scale == 0.0f,
+          "seed, flow_steps and cfg_scale are unset when the request names none");
+
+    const auto set = llama_grpc::parse_tts_request_options(
+        "Hello world", "", "it", "", {{"seed", "0"}, {"flow_steps", "16"}, {"cfg_scale", "2.5"}},
+        mode::reference_or_name, false);
+    check(set.ok, "seed, flow_steps and cfg_scale are accepted");
+    check(set.seed == 0, "a seed of 0 is a seed, not the unset sentinel");
+    check(set.flow_steps == 16, "flow_steps is parsed");
+    check(set.cfg_scale == 2.5f, "cfg_scale is parsed");
+
+    const auto random = llama_grpc::parse_tts_request_options(
+        "Hello world", "", "it", "", {{"seed", "-1"}}, mode::reference_or_name, false);
+    check(random.ok && random.seed == -1, "a seed of -1 is upstream's random seed: unset");
+}
+
+static void test_rejects_malformed_decoding_params() {
+    using mode = llama_grpc::tts_voice_mode;
+    const std::pair<const char *, const char *> bad[] = {
+        {"seed", "-2"}, {"seed", "zero"}, {"seed", "1.5"},
+        {"flow_steps", "-1"}, {"flow_steps", "1025"}, {"flow_steps", "16x"},
+        {"cfg_scale", "-0.5"}, {"cfg_scale", "nan"}, {"cfg_scale", "inf"}, {"cfg_scale", "high"},
+    };
+    for (const auto & [key, value] : bad) {
+        const auto opts = llama_grpc::parse_tts_request_options(
+            "Hello world", "", "it", "", {{key, value}}, mode::reference_or_name, false);
+        check(!opts.ok, (std::string(key) + " of \"" + value + "\" is rejected").c_str());
+        check(opts.error.find(key) != std::string::npos, (std::string(key) + "'s error names the field").c_str());
+    }
+}
+
 static void test_rejects_malformed_max_frames() {
     const auto negative = llama_grpc::parse_tts_request_options(
         "Hello world", "/models/voices/ref.wav", "", {{"max_frames", "-1"}}, true);
@@ -240,6 +327,8 @@ int main() {
     test_rejects_missing_speaker_reference();
     test_accepts_named_voice_without_reference();
     test_accepts_empty_voice_without_reference();
+    test_a_model_that_clones_and_describes_takes_either_or_neither();
+    test_a_required_reference_keeps_its_rules_and_gains_the_transcript();
     test_parses_sampling_params();
     test_rejects_malformed_sampling_params();
     test_rejects_out_of_range_sampling_params();
@@ -247,6 +336,8 @@ int main() {
     test_accepts_sampling_param_boundaries();
     test_parses_max_frames();
     test_rejects_malformed_max_frames();
+    test_parses_the_decoding_s_seed_steps_and_guidance();
+    test_rejects_malformed_decoding_params();
     test_ignores_unknown_params();
 
     if (failures == 0) {

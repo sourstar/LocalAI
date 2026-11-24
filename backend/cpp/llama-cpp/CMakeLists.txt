@@ -128,6 +128,11 @@ if(LLAMA_GRPC_BUILD_TESTS)
     target_compile_features(tts_request_options_test PRIVATE cxx_std_17)
     add_test(NAME tts_request_options_test COMMAND tts_request_options_test)
 
+    add_executable(tts_voice_cache_test tts_voice_cache_test.cpp tts_voice_cache.h)
+    target_include_directories(tts_voice_cache_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_features(tts_voice_cache_test PRIVATE cxx_std_17)
+    add_test(NAME tts_voice_cache_test COMMAND tts_voice_cache_test)
+
     add_executable(transcription_prompt_test transcription_prompt_test.cpp transcription_prompt.h)
     target_include_directories(transcription_prompt_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_features(transcription_prompt_test PRIVATE cxx_std_17)
