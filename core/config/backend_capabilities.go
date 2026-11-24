@@ -1100,12 +1100,27 @@ func init() {
 // deliberately insufficient. Operators with custom filenames can opt in or
 // out explicitly with tts.voice_cloning; the model option spelling remains a
 // compatibility fallback for configurations created before the typed field.
+//
+// A backend the table does not know at all - an operator's own build,
+// installed under a name of its own - has no contract to narrow, and until
+// now no way in: the lookup failed before tts.voice_cloning was read, so a
+// saved voice profile was refused whatever the model file said. For such a
+// backend the model's explicit tts.voice_cloning: true is the only statement
+// there is, and it is honoured with the reference contract the cloning
+// backends share. Without it the answer stays no, and a KNOWN backend that
+// cannot clone is not opened by it.
 func VoiceCloningForModel(cfg *ModelConfig) *VoiceCloningCapability {
 	if cfg == nil {
 		return nil
 	}
 	capability, backend := resolveBackendCapability(cfg.Backend)
-	if capability == nil || capability.VoiceCloning == nil {
+	if capability == nil {
+		if cfg.Backend != "" && cfg.VoiceCloning != nil && *cfg.VoiceCloning {
+			return referenceVoiceCloning()
+		}
+		return nil
+	}
+	if capability.VoiceCloning == nil {
 		return nil
 	}
 	if cfg.VoiceCloning != nil {

@@ -389,6 +389,60 @@ var _ = Describe("llama-cpp TTS capabilities", func() {
 		cfg.TTSConfig.VoiceCloning = &disabled
 		Expect(VoiceCloningForModel(&cfg)).To(BeNil())
 	})
+
+	// An operator's own build of a backend is installed under a name of its
+	// own - here the digest of what it was built from - which no table entry
+	// and no stripped gallery variant resolves. The lookup used to end the
+	// question there: a saved voice profile was answered "selected model does
+	// not support reference-audio voice cloning" and tts.voice_cloning: true
+	// in the model file changed nothing, because it was never read.
+	Describe("a backend the table does not know", func() {
+		const custom = "acme-sycl-f16-llama-cpp-d6f9b5247671-stack-7c301a7ba437"
+		enabled, disabled := true, false
+
+		It("resolves to nothing, which is why the model's word is needed", func() {
+			Expect(GetBackendCapability(custom)).To(BeNil())
+		})
+
+		It("is refused without the model's word, as before", func() {
+			cfg := ttsModel(custom)
+			Expect(VoiceCloningForModel(&cfg)).To(BeNil())
+		})
+
+		It("is given the reference contract on an explicit tts.voice_cloning: true", func() {
+			cfg := ttsModel(custom)
+			cfg.TTSConfig.VoiceCloning = &enabled
+			cloning := VoiceCloningForModel(&cfg)
+			Expect(cloning).NotTo(BeNil())
+			Expect(cloning.ReferenceTranscriptRequired).To(BeTrue())
+			Expect(cloning.AcceptedAudioFormats).To(ContainElement("audio/wav"))
+		})
+
+		It("stays refused on an explicit false", func() {
+			cfg := ttsModel(custom)
+			cfg.TTSConfig.VoiceCloning = &disabled
+			Expect(VoiceCloningForModel(&cfg)).To(BeNil())
+		})
+
+		It("gives every caller a contract of its own to modify", func() {
+			cfg := ttsModel(custom)
+			cfg.TTSConfig.VoiceCloning = &enabled
+			first := VoiceCloningForModel(&cfg)
+			first.AcceptedAudioFormats[0] = "audio/changed"
+			Expect(VoiceCloningForModel(&cfg).AcceptedAudioFormats).To(ContainElement("audio/wav"))
+		})
+
+		It("does not open a known backend that cannot clone, nor a model with no backend named", func() {
+			known := ModelConfig{Name: "a-piper-voice", Backend: "piper"}
+			known.TTSConfig.VoiceCloning = &enabled
+			Expect(GetBackendCapability("piper")).NotTo(BeNil())
+			Expect(VoiceCloningForModel(&known)).To(BeNil())
+
+			unnamed := ModelConfig{Name: "auto-detected"}
+			unnamed.TTSConfig.VoiceCloning = &enabled
+			Expect(VoiceCloningForModel(&unnamed)).To(BeNil())
+		})
+	})
 })
 
 var _ = Describe("IsValidUsecaseForBackend", func() {
