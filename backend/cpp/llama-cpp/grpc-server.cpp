@@ -117,6 +117,7 @@
 #endif
 
 #include "parent_watch.h" // best-effort parent-death backstop (see header)
+#include "second_signal.h" // a second signal leaves at once, without exit() (see header)
 
 
 using grpc::Server;
@@ -220,10 +221,9 @@ static std::atomic_flag is_terminating = ATOMIC_FLAG_INIT;
 
 static inline void signal_handler(int signal) {
     if (is_terminating.test_and_set()) {
-        // in case it hangs, we can force terminate the server by hitting Ctrl+C twice
-        // this is for better developer experience, we can remove when the server is stable enough
-        fprintf(stderr, "Received second interrupt, terminating immediately.\n");
-        exit(1);
+        // a second signal while the first is served: leave now, without exit()
+        // and without stdio - both can block inside a handler (second_signal.h)
+        llama_grpc::terminate_on_second_signal();
     }
 
     shutdown_handler(signal);
