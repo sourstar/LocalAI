@@ -88,6 +88,7 @@
 #include "stream_peer.h"
 #include "realtime_session.h"
 #include "tts_request_options.h"
+#include "tts_voice_cache.h"
 #include "embedding_tokens.h"
 #include "transcription_prompt.h"
 #include <getopt.h>
@@ -4227,21 +4228,38 @@ public:
         }
 
         // Qwen3-TTS Base takes a speaker reference file; LFM3-Audio takes a
-        // named voice through its "tts" chat template. Forks without the voice
-        // probe predate named voices, so they keep the reference rule.
+        // named voice through its "tts" chat template. A model that clones and
+        // also has a "tts" template (OmniVoice) takes either: a reference when
+        // the request's voice names a file, a described voice otherwise, or
+        // its own voice when the request names none. Forks without the voice
+        // probe predate named voices, so they keep the reference rule for
+        // every model that has no "tts" template to describe a voice with.
+        auto voice_mode = llama_grpc::tts_voice_mode::reference;
+#if LOCALAI_HAS_TTS_TEMPLATE
+        const bool can_reference = ctx_server.impl->mtmd_cap.audio_gen_spk_ref;
+        const bool has_template  = llama_model_chat_template(ctx_server.impl->model_tgt, "tts") != nullptr;
+        if (can_reference && has_template) {
+            voice_mode = llama_grpc::tts_voice_mode::reference_or_name;
+        }
 #if LOCALAI_HAS_TTS_VOICE
-        const bool needs_reference = ctx_server.impl->mtmd_cap.audio_gen_spk_ref;
-#else
-        const bool needs_reference = true;
+        else if (!can_reference) {
+            voice_mode = llama_grpc::tts_voice_mode::name;
+        }
 #endif
+#endif
+        std::error_code voice_ec;
+        const bool voice_is_file = !request->voice().empty()
+            && std::filesystem::is_regular_file(request->voice(), voice_ec);
 
         std::map<std::string, std::string> params(request->params().begin(), request->params().end());
         const auto opts = llama_grpc::parse_tts_request_options(
             request->text(),
             request->voice(),
             request->has_language() ? request->language() : std::string(),
+            request->has_instructions() ? request->instructions() : std::string(),
             params,
-            needs_reference);
+            voice_mode,
+            voice_is_file);
         if (!opts.ok) {
             return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, opts.error);
         }
@@ -4257,16 +4275,26 @@ public:
             task.tts_inp.set_lang(opts.language);
         }
 
-        if (needs_reference) {
+        if (!opts.voice_path.empty()) {
             auto wrapper = mtmd_helper_bitmap_init_from_file(ctx_server.impl->mctx, opts.voice_path.c_str(), false LOCALAI_MTMD_INIT_OPT_ARG(ctx_server.impl->init_opt));
             if (!wrapper.bitmap) {
                 return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                     "failed to read speaker reference audio: " + opts.voice_path);
             }
             task.tts_inp.set_speaker_ref(mtmd::bitmap_ptr(wrapper.bitmap));
+            // A voice profile's clip: the engine's encoding of it is kept in a
+            // file beside the profile's own clip, so a model that has just
+            // loaded reads it instead of encoding again, and deleting the
+            // profile deletes it (tts_voice_cache.h). Any other clip: memory only.
+            llama_grpc::set_speaker_ref_cache(task.tts_inp, opts.voice_path);
+            // The reference's transcript, where the request has one (a voice
+            // profile's): the models that take it clone closer with it.
+            if (!opts.ref_text.empty()) {
+                task.tts_inp.set_speaker_ref_text(opts.ref_text);
+            }
         }
-#if LOCALAI_HAS_TTS_VOICE
-        else {
+#if LOCALAI_HAS_TTS_TEMPLATE
+        if (voice_mode != llama_grpc::tts_voice_mode::reference) {
             // Same as upstream POST /tts: the model's "tts" template renders the
             // prompt with the language and voice, and an empty voice takes the
             // template default. Fall back to the raw text when there is no template.
@@ -4275,11 +4303,27 @@ public:
             if (!tts_prompt.empty()) {
                 task.tts_inp.set_prompt(tts_prompt);
             }
+#if LOCALAI_HAS_TTS_VOICE
             task.tts_inp.set_voice(opts.voice);
+#endif
         }
 #endif
         task.tts_inp.data.top_k    = opts.top_k;
         task.tts_inp.data.top_p    = opts.top_p;
+        // The decoding's seed, steps and guidance, where the request sets them
+        // (params, as upstream's POST /v1/audio/speech reads them from its
+        // body). Unset, the pipeline draws a seed for the request and keeps the
+        // model's own steps and guidance. A model that has no steps or
+        // guidance refuses a set value when the task starts.
+        if (opts.seed >= 0) {
+            task.tts_inp.data.seed = static_cast<uint32_t>(opts.seed);
+        }
+        if (opts.flow_steps > 0) {
+            task.tts_inp.data.flow_steps = opts.flow_steps;
+        }
+        if (opts.cfg_scale > 0.0f) {
+            task.tts_inp.data.cfg_scale = opts.cfg_scale;
+        }
         task.tts_inp.data.stream   = stream;
         task.tts_inp.data.out_type = stream
             ? MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM   // Go prepends its own WAV header, see core/backend/tts.go
@@ -4290,6 +4334,10 @@ public:
         // its codec EOS, so a short input can otherwise generate the full cap.
         task.params.n_predict = opts.max_frames > 0 ? opts.max_frames : -1;
         task.params.sampling  = params_base.sampling;
+        // the request's seed is the sampler's too, as upstream has it
+        if (opts.seed >= 0) {
+            task.params.sampling.seed = static_cast<uint32_t>(opts.seed);
+        }
         // Both values mirror upstream's draft POST /tts handler. Note that the
         // pair is INERT at this pin: llama_sampler_init_penalties() clamps
         // penalty_last_n with std::max(penalty_last_n, 0), so -1 means "off",
