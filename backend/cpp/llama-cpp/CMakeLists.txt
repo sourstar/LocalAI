@@ -118,6 +118,12 @@ if(LLAMA_GRPC_BUILD_TESTS)
     target_compile_features(parent_watch_test PRIVATE cxx_std_17)
     add_test(NAME parent_watch_test COMMAND parent_watch_test)
 
+    # Second-signal exit test (second_signal.h) — standard library only.
+    add_executable(second_signal_test second_signal_test.cpp second_signal.h)
+    target_include_directories(second_signal_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_features(second_signal_test PRIVATE cxx_std_17)
+    add_test(NAME second_signal_test COMMAND second_signal_test)
+
     add_executable(passthrough_options_test passthrough_options_test.cpp passthrough_options.h)
     target_include_directories(passthrough_options_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_features(passthrough_options_test PRIVATE cxx_std_17)

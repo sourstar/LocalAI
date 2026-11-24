@@ -91,6 +91,10 @@ cp -r context_on_demand_test.cpp llama.cpp/tools/grpc-server/
 # test (run via backend/cpp/run-unit-tests.sh; also buildable under ctest).
 cp -r parent_watch.h llama.cpp/tools/grpc-server/
 cp -r parent_watch_test.cpp llama.cpp/tools/grpc-server/
+# Second-signal exit (included by grpc-server.cpp) and its standalone unit
+# test (run via backend/cpp/run-unit-tests.sh; also buildable under ctest).
+cp -r second_signal.h llama.cpp/tools/grpc-server/
+cp -r second_signal_test.cpp llama.cpp/tools/grpc-server/
 # Dead-stream tracker (included by grpc-server.cpp) and its standalone unit
 # test (run via backend/cpp/run-unit-tests.sh; also buildable under ctest).
 cp -r stream_peer.h llama.cpp/tools/grpc-server/
