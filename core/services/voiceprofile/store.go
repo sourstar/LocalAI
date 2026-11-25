@@ -141,6 +141,9 @@ type Store struct {
 	initErr  error
 	now      func() time.Time
 
+	// leaseOwner is this Store's locked owner file (lease_owner.go).
+	leaseOwner *os.File
+
 	initOnce sync.Once
 	mu       sync.RWMutex
 }
@@ -149,7 +152,7 @@ type Store struct {
 // performs no filesystem I/O; errors are reported by the first operation.
 func NewStore(dataPath string) *Store {
 	s := &Store{
-		leaseDir: filepath.Join(".leases", uuid.NewString()),
+		leaseDir: filepath.Join(leasesDirName, uuid.NewString()),
 		now:      time.Now,
 	}
 	if strings.TrimSpace(dataPath) == "" {
@@ -208,7 +211,14 @@ func (s *Store) initialize() error {
 		defer func() { _ = root.Close() }()
 		if err := root.MkdirAll(s.leaseDir, 0o700); err != nil {
 			s.initErr = fmt.Errorf("voiceprofile: create lease directory: %w", err)
+			return
 		}
+		if err := s.claimLeaseDirectory(root); err != nil {
+			s.initErr = fmt.Errorf("voiceprofile: claim lease directory: %w", err)
+			return
+		}
+		// what the processes before this one left behind
+		s.purgeAbandonedLeases(root)
 	})
 	return s.initErr
 }
@@ -503,7 +513,9 @@ func (s *Store) LeaseAudios(_ context.Context, id string) (Profile, []string, fu
 }
 
 // Delete removes one profile. Existing audio leases remain valid until their
-// synthesis requests complete.
+// synthesis requests complete; the leases of processes that are gone are
+// removed with it, so that nothing of the recording outlives the delete but
+// a synthesis still running.
 //
 // Delete ignores ownership; callers that act for a user use DeleteFor.
 func (s *Store) Delete(ctx context.Context, id string) error {
@@ -541,6 +553,7 @@ func (s *Store) deleteIf(_ context.Context, id string, check func(Profile) error
 	if err := root.RemoveAll(id); err != nil {
 		return fmt.Errorf("voiceprofile: delete profile: %w", err)
 	}
+	s.purgeAbandonedLeases(root)
 	_ = syncDirectory(root)
 	return nil
 }
@@ -558,6 +571,11 @@ func (s *Store) Close() error {
 	defer func() { _ = root.Close() }()
 	if err := root.RemoveAll(s.leaseDir); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("voiceprofile: remove lease directory: %w", err)
+	}
+	if s.leaseOwner != nil {
+		// after the directory is gone: nobody finds an unlocked owner file in it
+		_ = s.leaseOwner.Close()
+		s.leaseOwner = nil
 	}
 	return nil
 }
